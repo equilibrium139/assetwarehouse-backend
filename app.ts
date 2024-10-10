@@ -2,6 +2,15 @@ const express = require("express");
 const cors = require("cors");
 const app = express();
 const port = 8080;
+const pg = require("pg");
+const Pool = pg.Pool;
+
+const pool = new Pool();
+
+pool.on("error", (err, client) => {
+  console.error("Unexpected error on idle client", err);
+  process.exit(-1);
+});
 
 app.use(cors());
 
@@ -19,18 +28,18 @@ app.listen(port, () => {
 });
 
 app.get("/api/assets/popular/:count", async (req, res) => {
-  const count = req.params.count;
-  const resultCount = Math.min(count, dummyAssets.length);
-  let popularAssets = [...dummyAssets]
-    .sort((a, b) => {
-      return b.views - a.views;
-    })
-    .slice(0, count);
-  res.json(popularAssets);
-  try {
-  } catch (err) {
-    res.status(500).json({ error: "Server error" });
-  }
+  pool.query("SELECT * FROM assets", (error, results) => {
+    if (error) {
+      throw error;
+    }
+    const count = req.params.count;
+    let popularAssets = [...results.rows]
+      .sort((a, b) => {
+        return b.views - a.views;
+      })
+      .slice(0, count);
+    res.json(popularAssets);
+  });
 });
 
 app.use(express.static("public"));
