@@ -68,6 +68,14 @@ app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { 
             throw new Error("Name, description, thumbnail and asset are required");
         }
 
+        const query = {
+            text: `INSERT INTO 
+                    assets(name, description, file_url, thumbnail_url, created_by, created_at, updated_at, tags, is_public, downloads, views)
+                    VALUES($1, $2, $3, $4, 1, clock_timestamp(), clock_timestamp(), '{"cool", "beans"}', true, 0, 0)`,
+            values: [name, description, assetFile.originalname, thumbnailFile.originalname]
+        };
+
+        await pool.query(query);
         res.status(201).json({ message: 'Asset uploaded successfully' });
     } catch (error) {
         if (req.files) {
