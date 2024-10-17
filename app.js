@@ -69,8 +69,41 @@ app.get("/api/assets/popular/:count", async (req, res) => {
     }
 });
 
+async function getUserBySessionID(sessionID) {
+    try {
+        const sessionQuery = {
+            text: `SELECT expiration, user_id FROM sessions WHERE sessions.id=$1`,
+            values: [sessionID]
+        };
+        const sessionQueryRes = await pool.query(sessionQuery);
+        const session = sessionQueryRes.rows[0];
+        const expirationDate = new Date(session.expiration);
+        const now = new Date();
+        if (expirationDate < now) {
+            console.log("Expired session ", sessionID);
+            return null;
+        }
+        const userQuery = {
+            text: `SELECT id, username, email FROM users WHERE id=$1`,
+            values: [session.user_id]
+        };
+        const userQueryRes = await pool.query(userQuery);
+        const user = userQueryRes.rows[0];
+        return user;
+    } catch (error) {
+        console.log(error);
+        return null;
+    }
+}
+
 app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]), async (req, res) => {
     try {
+        const sessionID = req.cookies[sessionIDKey];
+        const user = await getUserBySessionID(sessionID);
+        if (!user) {
+            return res.status(404).json({ message: "Not authorized to upload" });
+        }
+
         const { name, description } = req.body;
         const assetFile = req.files['asset'] ? req.files['asset'][0] : null;
         const thumbnailFile = req.files['thumbnail'] ? req.files['thumbnail'][0] : null;
@@ -82,8 +115,8 @@ app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { 
         const query = {
             text: `INSERT INTO 
                     assets(name, description, file_url, thumbnail_url, created_by, created_at, updated_at, tags, is_public, downloads, views)
-                    VALUES($1, $2, $3, $4, 1, now(), now(), '{"cool", "beans"}', true, 0, 0)`,
-            values: [name, description, assetFile.originalname, thumbnailFile.originalname]
+                    VALUES($1, $2, $3, $4, $5, now(), now(), '{"cool", "beans"}', true, 0, 0)`,
+            values: [name, description, assetFile.originalname, thumbnailFile.originalname, user.id]
         };
 
         await pool.query(query);
@@ -185,25 +218,12 @@ app.post("/login", async (req, res) => {
         else {
             const sessionID = req.cookies[sessionIDKey];
             if (sessionID) {
-                const getSessionQuery = {
-                    text: `SELECT expiration, user_id FROM sessions WHERE sessions.id=$1`,
-                    values: [sessionID]
-                };
-                const sessionQueryRes = await pool.query(getSessionQuery);
-                const session = sessionQueryRes.rows[0];
-                const expirationDate = new Date(session.expiration);
-                const now = new Date();
-                if (expirationDate > now) {
-                    const getUserByIDQuery = {
-                        text: `SELECT id, username, email FROM users WHERE id=$1`,
-                        values: [session.user_id]
-                    };
-                    const userQueryRes = await pool.query(getUserByIDQuery);
-                    const user = userQueryRes.rows[0];
-                    res.status(200).json({ ...user });
+                const user = await getUserBySessionID(sessionID);
+                if (!user) {
+                    return res.status(400).json({ message: "Session expired" });
                 }
                 else {
-                    res.status(400).json({ message: "Session expired" });
+                    res.status(200).json({ ...user });
                 }
             }
             else {
