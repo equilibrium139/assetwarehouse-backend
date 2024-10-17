@@ -17,6 +17,7 @@ pool.on("error", (err, client) => {
 
 const uniqueViolationCode = "23505";
 const sessionIDKey = "awsid";
+const sessionLifeDays = 7;
 
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -53,18 +54,19 @@ app.listen(port, () => {
 });
 
 app.get("/api/assets/popular/:count", async (req, res) => {
-    pool.query("SELECT * FROM assets", (error, results) => {
-        if (error) {
-            throw error;
-        }
-        const count = req.params.count;
-        let popularAssets = [...results.rows]
-            .sort((a, b) => {
-                return b.views - a.views;
-            })
-            .slice(0, count);
-        res.json(popularAssets);
-    });
+    try {
+        pool.query("SELECT * FROM assets", (error, results) => {
+            const count = req.params.count;
+            let popularAssets = [...results.rows]
+                .sort((a, b) => {
+                    return b.views - a.views;
+                })
+                .slice(0, count);
+            res.json(popularAssets);
+        });
+    } catch (error) {
+        res.status(500).json({ message: "Failed to find assets" });
+    }
 });
 
 app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]), async (req, res) => {
@@ -74,13 +76,13 @@ app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { 
         const thumbnailFile = req.files['thumbnail'] ? req.files['thumbnail'][0] : null;
 
         if (!name || !description || !thumbnailFile || !assetFile) {
-            throw new Error("Name, description, thumbnail and asset are required");
+            return res.status(404).json({ message: "Name, description, thumbnail and asset are required" });
         }
 
         const query = {
             text: `INSERT INTO 
                     assets(name, description, file_url, thumbnail_url, created_by, created_at, updated_at, tags, is_public, downloads, views)
-                    VALUES($1, $2, $3, $4, 1, clock_timestamp(), clock_timestamp(), '{"cool", "beans"}', true, 0, 0)`,
+                    VALUES($1, $2, $3, $4, 1, now(), now(), '{"cool", "beans"}', true, 0, 0)`,
             values: [name, description, assetFile.originalname, thumbnailFile.originalname]
         };
 
@@ -107,16 +109,27 @@ app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { 
 app.post("/signup", async (req, res) => {
     try {
         const password_hash = await bcrypt.hash(req.body.password, 10);
-        const query = {
+        const newUserQuery = {
             text: `INSERT INTO 
                     users(username, email, password_hash, created_at, updated_at)
-                    VALUES($1, $2, $3, clock_timestamp(), clock_timestamp())`,
+                    VALUES($1, $2, $3, now(), now())
+                    RETURNING id, username, email`,
             values: [req.body.username, req.body.email, password_hash]
         };
-        const queryResult = await pool.query(query);
+        const queryResult = await pool.query(newUserQuery);
         const newUser = queryResult.rows[0];
-        res.status(200).cookie(sessionIDKey, crypto.randomUUID(), { maxAge: 7 * 24 * 60 * 60 * 1000, httpOnly: true, secure: true, sameSite: "none" })
-            .json({ id: newUser.id, username: newUser.username, email: newUser.email });
+        const sessionID = crypto.randomUUID();
+        const expirationDate = new Date();
+        expirationDate.setDate(expirationDate.getDate() + 7);
+        const newSessionQuery = {
+            text: `INSERT INTO 
+                    sessions(id, expiration, user_id)
+                    VALUES($1, $2, $3)`,
+            values: [sessionID, expirationDate, newUser.id]
+        };
+        await pool.query(newSessionQuery);
+        res.status(200).cookie(sessionIDKey, sessionID, { maxAge: sessionLifeDays * 24 * 60 * 60 * 1000, httpOnly: true, secure: true, sameSite: "none" })
+            .json({ ...newUser });
     } catch (error) {
         console.error("Error registering user: ", error);
         let errorMessage = "Unknown error";
@@ -131,5 +144,75 @@ app.post("/signup", async (req, res) => {
         res.status(400).json({ error: errorMessage });
     }
 });
+
+app.post("/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (email && password) {
+            const getUserByEmailQuery = {
+                text: `SELECT id, username, email, password_hash FROM users WHERE email=$1`,
+                values: [email]
+            };
+            const queryRes = await pool.query(getUserByEmailQuery);
+            if (queryRes.rowCount === 0) {
+                return res.status(404).json({ error: "User doesn't exist" });
+            }
+            else {
+                const user = queryRes.rows[0];
+                const match = await bcrypt.compare(password, user.password_hash);
+                if (match) {
+                    const sessionID = crypto.randomUUID();
+                    const expirationDate = new Date();
+                    expirationDate.setDate(expirationDate.getDate() + 7);
+                    const newSessionQuery = {
+                        text: `INSERT INTO 
+                               sessions(id, expiration, user_id)
+                               VALUES($1, $2, $3)
+                               RETURNING id, expiration, user_id`,
+                        values: [sessionID, expirationDate, user.id]
+                    };
+                    const newSessionQueryRes = await pool.query(newSessionQuery);
+                    const newSession = newSessionQueryRes.rows[0];
+                    const responseUser = { id: user.id, username: user.username, email: user.email };
+                    return res.status(200).cookie(sessionIDKey, newSession.id, { maxAge: sessionLifeDays * 24 * 60 * 60 * 1000, httpOnly: true, secure: true, sameSite: "none" }).
+                        json({ ...responseUser });
+                }
+                else {
+                    return res.status(401).json({ error: "Wrong password" });
+                }
+            }
+        }
+        else {
+            const sessionID = req.cookies[sessionIDKey];
+            if (sessionID) {
+                const getSessionQuery = {
+                    text: `SELECT expiration, user_id FROM sessions WHERE sessions.id=$1`,
+                    values: [sessionID]
+                };
+                const sessionQueryRes = await pool.query(getSessionQuery);
+                const session = sessionQueryRes.rows[0];
+                const expirationDate = new Date(session.expiration);
+                const now = new Date();
+                if (expirationDate > now) {
+                    const getUserByIDQuery = {
+                        text: `SELECT id, username, email FROM users WHERE id=$1`,
+                        values: [session.user_id]
+                    };
+                    const userQueryRes = await pool.query(getUserByIDQuery);
+                    const user = userQueryRes.rows[0];
+                    res.status(200).json({ ...user });
+                }
+                else {
+                    res.status(400).json({ message: "Session expired" });
+                }
+            }
+            else {
+                return res.status(400).json({ error: "No username and password or session provided" });
+            }
+        }
+    } catch (error) {
+        res.status(400).json({ error: error });
+    }
+})
 
 app.use(express.static("public"));
