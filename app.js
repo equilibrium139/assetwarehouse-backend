@@ -50,20 +50,27 @@ app.get("/", (req, res) => {
 });
 
 app.listen(port, () => {
-    console.log(`Example app listening on port ${port}`);
+    console.log(`Asset warehouse listening on port ${port}`);
 });
 
 app.get("/api/assets/popular/:count", async (req, res) => {
     try {
-        pool.query("SELECT * FROM assets", (error, results) => {
-            const count = req.params.count;
-            let popularAssets = [...results.rows]
-                .sort((a, b) => {
-                    return b.views - a.views;
-                })
-                .slice(0, count);
-            res.json(popularAssets);
-        });
+        const count = parseInt(req.params.count, 10);
+        if (isNaN(count) || count <= 0) {
+            return res.status(400).json({ error: "Invalid count parameter" });
+        }
+        // make sure assets are public
+        const popularAssetsQuery = {
+            text: `SELECT a.id, a.name, a.description, a.file_url, a.thumbnail_url, a.created_by, a.created_at, a.updated_at, a.tags, a.downloads, a.views,
+                          u.username 
+                   FROM (assets AS a INNER JOIN users AS u ON a.created_by = u.id) 
+                   WHERE a.is_public=true
+                   ORDER BY a.views DESC
+                   LIMIT $1`,
+            values: [count]
+        };
+        const result = await pool.query(popularAssetsQuery);
+        res.json(result.rows);
     } catch (error) {
         res.status(500).json({ message: "Failed to find assets" });
     }
