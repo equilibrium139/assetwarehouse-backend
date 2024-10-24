@@ -53,29 +53,6 @@ app.listen(port, () => {
     console.log(`Asset warehouse listening on port ${port}`);
 });
 
-app.get("/api/assets/popular/:count", async (req, res) => {
-    try {
-        const count = parseInt(req.params.count, 10);
-        if (isNaN(count) || count <= 0) {
-            return res.status(400).json({ error: "Invalid count parameter" });
-        }
-        // make sure assets are public
-        const popularAssetsQuery = {
-            text: `SELECT a.id, a.name, a.description, a.file_url, a.thumbnail_url, a.created_by, a.created_at, a.updated_at, a.tags, a.downloads, a.views,
-                          u.username 
-                   FROM (assets AS a INNER JOIN users AS u ON a.created_by = u.id) 
-                   WHERE a.is_public=true
-                   ORDER BY a.views DESC
-                   LIMIT $1`,
-            values: [count]
-        };
-        const result = await pool.query(popularAssetsQuery);
-        res.json(result.rows);
-    } catch (error) {
-        res.status(500).json({ message: "Failed to find assets" });
-    }
-});
-
 async function getUserBySessionID(sessionID) {
     try {
         const sessionQuery = {
@@ -83,6 +60,9 @@ async function getUserBySessionID(sessionID) {
             values: [sessionID]
         };
         const sessionQueryRes = await pool.query(sessionQuery);
+        if (sessionQueryRes.rowCount == 0) {
+            return null;
+        }
         const session = sessionQueryRes.rows[0];
         const expirationDate = new Date(session.expiration);
         const now = new Date();
@@ -102,6 +82,49 @@ async function getUserBySessionID(sessionID) {
         return null;
     }
 }
+
+app.get("/api/user/assets", async (req, res) => {
+    try {
+        const user = await getUserBySessionID(req.cookies[sessionIDKey]);
+        if (!user) {
+            return res.status(401).json({ error: "Unauthorized user (session expired or invalid session)" });
+        }
+        const userAssetsQuery = {
+            text: `SELECT a.id, a.name, a.description, a.file_url, a.thumbnail_url, a.created_by, a.created_at, a.updated_at, a.tags, a.downloads, a.views
+                   FROM assets AS a
+                   WHERE a.created_by=$1
+                   ORDER BY a.created_at DESC`,
+            values: [user.id]
+        };
+        const queryRes = await pool.query(userAssetsQuery);
+        return res.status(200).json(queryRes.rows);
+    } catch (error) {
+        console.log(error);
+        return res.status(500).json({ message: "Failed to fetch user data, try again" });
+    }
+})
+
+app.get("/api/assets/popular/:count", async (req, res) => {
+    try {
+        const count = parseInt(req.params.count, 10);
+        if (isNaN(count) || count <= 0) {
+            return res.status(400).json({ error: "Invalid count parameter" });
+        }
+        const popularAssetsQuery = {
+            text: `SELECT a.id, a.name, a.description, a.file_url, a.thumbnail_url, a.created_by, a.created_at, a.updated_at, a.tags, a.downloads, a.views,
+                          u.username 
+                   FROM (assets AS a INNER JOIN users AS u ON a.created_by = u.id) 
+                   WHERE a.is_public=true
+                   ORDER BY a.views DESC
+                   LIMIT $1`,
+            values: [count]
+        };
+        const result = await pool.query(popularAssetsQuery);
+        res.json(result.rows);
+    } catch (error) {
+        res.status(500).json({ message: "Failed to find assets" });
+    }
+});
 
 app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]), async (req, res) => {
     try {
