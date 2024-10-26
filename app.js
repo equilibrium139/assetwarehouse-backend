@@ -104,6 +104,47 @@ app.get("/api/user/assets", async (req, res) => {
     }
 })
 
+app.put("/api/assets/:id", upload.none(), async (req, res) => {
+    try {
+        const assetID = parseInt(req.params.id, 10);
+        if (isNaN(assetID) || assetID <= 0) {
+            return res.status(400).json({ error: "Invalid id parameter" });
+        }
+        const { name, description } = req.body;
+        if (!name || !description) {
+            return res.status(400).json({ error: "Name and description are required" });
+        }
+
+        const user = await getUserBySessionID(req.cookies[sessionIDKey]);
+        if (!user) {
+            return res.status(401).json({ error: "Unauthorized user (session expired or invalid session)" });
+        }
+        const getAssetCreatorByIDQuery = {
+            text: `SELECT created_by FROM assets WHERE id=$1`,
+            values: [assetID]
+        };
+        const queryResult = await pool.query(getAssetCreatorByIDQuery);
+        if (queryResult.rows == 0) {
+            return res.status(400).json({ error: "Asset not found" });
+        }
+        const asset = queryResult.rows[0];
+        if (asset.created_by !== user.id) {
+            return res.status(401).json({ error: "Unauthorized user" });
+        }
+
+        const updateAssetQuery = {
+            text: `UPDATE assets SET name=$1, description=$2 WHERE id=$3`,
+            values: [name, description, assetID]
+        };
+        await pool.query(updateAssetQuery);
+        res.status(201).json({ message: "Successfully updated asset" });
+    }
+    catch (error) {
+        console.log(error);
+        return res.status(500).json({ message: "Failed to modify asset, try again" });
+    }
+})
+
 app.get("/api/assets/popular/:count", async (req, res) => {
     try {
         const count = parseInt(req.params.count, 10);
