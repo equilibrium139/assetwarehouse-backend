@@ -5,7 +5,7 @@ const cors = require("cors");
 const app = express();
 const bcrypt = require("bcrypt");
 const cookieParser = require("cookie-parser");
-const port = 8080;
+const port = 3000;
 const pg = require("pg");
 const Pool = pg.Pool;
 const pool = new Pool();
@@ -335,3 +335,5 @@ app.post("/login", async (req, res) => {
 })
 
 app.use(express.static("public"));
+
+module.exports = app;
