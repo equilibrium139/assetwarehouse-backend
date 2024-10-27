@@ -38,10 +38,16 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
+const allowedOrigins = [
+    'http://localhost:3000', // Local frontend
+    'https://assetwarehouse-frontend.vercel.app', // Deployed frontend
+];
+
 app.use(cors({
-    origin: "http://localhost:3000",
-    credentials: true
+    origin: allowedOrigins,
+    credentials: true,
 }));
+
 app.use(express.json());
 app.use(cookieParser());
 
