@@ -104,6 +104,28 @@ app.get("/api/user/assets", async (req, res) => {
     }
 })
 
+app.get("/api/search", async (req, res) => {
+    const query = req.query.query;
+    if (!query) {
+        return res.status(400).json({ error: "Missing query parameter" });
+    }
+    try {
+        const searchQuery = {
+            text: `SELECT a.id, a.name, a.description, a.file_url, a.thumbnail_url, a.created_by, a.created_at, a.updated_at, a.tags, a.downloads, a.views
+               FROM assets AS a
+               WHERE document @@ websearch_to_tsquery($1)
+               ORDER BY ts_rank(document, websearch_to_tsquery($1))
+               LIMIT 10`,
+            values: [query]
+        };
+        const queryRes = await pool.query(searchQuery);
+        return res.status(200).json(queryRes.rows);
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({ message: "Failed to search, try again" });
+    }
+})
+
 app.put("/api/assets/:id", upload.none(), async (req, res) => {
     try {
         const assetID = parseInt(req.params.id, 10);
