@@ -5,14 +5,27 @@ const cors = require("cors");
 const app = express();
 const bcrypt = require("bcrypt");
 const cookieParser = require("cookie-parser");
-const port = 3000;
+const port = process.env.PORT || 8080;
 const pg = require("pg");
 const Pool = pg.Pool;
-const pool = new Pool();
+const pool = new Pool({
+    ssl: {
+        rejectUnauthorized: true,
+        ca: fs.readFileSync("./us-east-2-bundle.pem").toString()
+    }
+});
+
+pool.connect((err, client, release) => {
+    if (err) {
+        return console.error('Error acquiring client', err.stack);
+    }
+    console.log('Database connected successfully');
+    release();
+});
 
 pool.on("error", (err, client) => {
     console.error("Unexpected error on idle client", err);
-    // process.exit(-1);
+    process.exit(-1);
 });
 
 const uniqueViolationCode = "23505";
@@ -40,7 +53,7 @@ const upload = multer({ storage: storage });
 
 const allowedOrigins = [
     'http://localhost:3000', // Local frontend
-    'https://assetwarehouse-frontend.vercel.app', // Deployed frontend
+    'https://assetwarehouse.vercel.app', // Deployed frontend
 ];
 
 app.use(cors({
