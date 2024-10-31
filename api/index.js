@@ -1,6 +1,7 @@
 const express = require("express");
 const multer = require("multer");
 const fs = require("fs");
+const path = require("path");
 const cors = require("cors");
 const app = express();
 const bcrypt = require("bcrypt");
@@ -8,10 +9,11 @@ const cookieParser = require("cookie-parser");
 const port = process.env.PORT || 8080;
 const pg = require("pg");
 const Pool = pg.Pool;
+
 const pool = new Pool({
     ssl: {
         rejectUnauthorized: true,
-        ca: fs.readFileSync("./us-east-2-bundle.pem").toString()
+        ca: fs.readFileSync(path.join(process.cwd(), 'us-east-2-bundle.pem')).toString()
     }
 });
 
@@ -132,8 +134,8 @@ app.get("/api/search", async (req, res) => {
         const searchQuery = {
             text: `SELECT a.id, a.name, a.description, a.file_url, a.thumbnail_url, a.created_by, a.created_at, a.updated_at, a.tags, a.downloads, a.views
                FROM assets AS a
-               WHERE document @@ websearch_to_tsquery($1)
-               ORDER BY ts_rank(document, websearch_to_tsquery($1))
+               WHERE document @@ websearch_to_tsquery('english', $1)
+               ORDER BY ts_rank(document, websearch_to_tsquery('english', $1)) DESC
                LIMIT 10`,
             values: [query]
         };
@@ -141,7 +143,7 @@ app.get("/api/search", async (req, res) => {
         return res.status(200).json(queryRes.rows);
     } catch (error) {
         console.log(error);
-        res.status(500).json({ message: "Failed to search, try again" });
+        res.status(500).json({ message: "Failed to search assets" });
     }
 })
 
