@@ -1,14 +1,24 @@
 const express = require("express");
-const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const cors = require("cors");
 const app = express();
 const bcrypt = require("bcrypt");
 const cookieParser = require("cookie-parser");
-const port = process.env.PORT || 8080;
 const pg = require("pg");
 const Pool = pg.Pool;
+const { PutObjectCommand, S3Client } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
+const s3Client = new S3Client({
+    endpoint: "https://nyc3.digitaloceanspaces.com", // Find your endpoint in the control panel, under Settings. Prepend "https://".
+    forcePathStyle: false, // Configures to use subdomain/virtual calling format.
+    region: "us-east-1", // Must be "us-east-1" when creating new Spaces. Otherwise, use the region in your endpoint (for example, nyc3).
+    credentials: {
+        accessKeyId: process.env.SPACES_ACCESS_KEY, // Access key pair. You can create access key pairs using the control panel or API.
+        secretAccessKey: process.env.SPACES_SECRET // Secret access key defined through an environment variable.
+    }
+});
 
 const pool = new Pool({
     ssl: {
@@ -34,25 +44,6 @@ const uniqueViolationCode = "23505";
 const sessionIDKey = "awsid";
 const sessionLifeDays = 7;
 
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        if (file.fieldname === 'asset') {
-            cb(null, 'public/assets/models/');
-        }
-        else if (file.fieldname === 'thumbnail') {
-            cb(null, 'public/assets/thumbnails/');
-        }
-        else {
-            cb(null, 'public/assets/others/');
-        }
-    },
-    filename: function (req, file, cb) {
-        cb(null, file.originalname);
-    }
-})
-
-const upload = multer({ storage: storage });
-
 const allowedOrigins = [
     'http://localhost:3000', // Local frontend
     'https://assetwarehouse.vercel.app', // Deployed frontend
@@ -70,6 +61,7 @@ app.get("/", (req, res) => {
     res.send("Hello World!");
 });
 
+const port = process.env.PORT || 8080;
 app.listen(port, () => {
     console.log(`Asset warehouse listening on port ${port}`);
 });
@@ -147,7 +139,7 @@ app.get("/api/search", async (req, res) => {
     }
 })
 
-app.put("/api/assets/:id", upload.none(), async (req, res) => {
+app.put("/api/assets/:id", async (req, res) => {
     try {
         const assetID = parseInt(req.params.id, 10);
         if (isNaN(assetID) || assetID <= 0) {
@@ -210,7 +202,7 @@ app.get("/api/assets/popular/:count", async (req, res) => {
     }
 });
 
-app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]), async (req, res) => {
+app.post("/api/assets/upload", async (req, res) => {
     try {
         const sessionID = req.cookies[sessionIDKey];
         const user = await getUserBySessionID(sessionID);
@@ -218,36 +210,40 @@ app.post("/api/assets/upload", upload.fields([{ name: 'asset', maxCount: 1 }, { 
             return res.status(404).json({ message: "Not authorized to upload" });
         }
 
-        const { name, description } = req.body;
-        const assetFile = req.files['asset'] ? req.files['asset'][0] : null;
-        const thumbnailFile = req.files['thumbnail'] ? req.files['thumbnail'][0] : null;
+        const { name, description, assetFilename, thumbnailFilename } = req.body;
 
-        if (!name || !description || !thumbnailFile || !assetFile) {
-            return res.status(404).json({ message: "Name, description, thumbnail and asset are required" });
+        if (!name || !description || !assetFilename || !thumbnailFilename) {
+            return res.status(404).json({ message: "Name, description, asset filename and thumbnail filename are required" });
         }
 
         const query = {
             text: `INSERT INTO 
                     assets(name, description, file_url, thumbnail_url, created_by, created_at, updated_at, tags, is_public, downloads, views)
                     VALUES($1, $2, $3, $4, $5, now(), now(), '{"cool", "beans"}', true, 0, 0)`,
-            values: [name, description, assetFile.originalname, thumbnailFile.originalname, user.id]
+            values: [name, description, assetFilename, thumbnailFilename, user.id]
         };
 
         await pool.query(query);
-        res.status(201).json({ message: 'Asset uploaded successfully' });
+
+        const assetFileURL = user.id + "/" + assetFilename;
+        const assetFileKey = "assets/" + assetFileURL;
+        const thumbnailFileURL = user.id + "/" + thumbnailFilename;
+        const thumbnailFileKey = "thumbnails/" + thumbnailFileURL;
+        const assetUploadCommand = new PutObjectCommand({
+            Bucket: process.env.SPACES_BUCKET_NAME,
+            Key: assetFileKey,
+            ACL: "public-read"
+        });
+        const thumbnailUploadCommand = new PutObjectCommand({
+            Bucket: process.env.SPACES_BUCKET_NAME,
+            Key: thumbnailFileKey,
+            ACL: "public-read"
+        })
+        const assetUploadURL = await getSignedUrl(s3Client, assetUploadCommand, { expiresIn: 60 });
+        const thumbnailUploadURL = await getSignedUrl(s3Client, thumbnailUploadCommand, { expiresIn: 60 });
+
+        res.status(201).json({ assetUploadURL, thumbnailUploadURL });
     } catch (error) {
-        if (req.files) {
-            const files = Object.values(req.files).flat();
-            for (const file of files) {
-                fs.unlink(file.path, (err) => {
-                    if (err) {
-                        console.error("Error deleting file ${file.path}: ", err);
-                    } else {
-                        console.log("Deleted file ${file.path}");
-                    }
-                })
-            }
-        }
         console.error("Error uploading asset: ", error);
         res.status(500).json({ error: "Server error" });
     }
