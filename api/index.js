@@ -20,10 +20,11 @@ const s3Client = new S3Client({
     }
 });
 
+const pemKey = process.env.AWS_PEM_KEY;
 const pool = new Pool({
     ssl: {
         rejectUnauthorized: true,
-        ca: fs.readFileSync(path.join(process.cwd(), 'us-east-2-bundle.pem')).toString()
+        ca: pemKey ? pemKey : fs.readFileSync(path.join(process.cwd(), 'us-east-2-bundle.pem')).toString()
     }
 });
 
